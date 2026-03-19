@@ -1,8 +1,3 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -15,9 +10,14 @@ using IOPath = System.IO.Path;
 
 namespace Microsoft.Unity.VisualStudio.Editor
 {
-	internal class VisualStudioCodeInstallation : VisualStudioInstallation
+	internal class CodeBuddyInstallation : VisualStudioInstallation
 	{
 		private static readonly IGenerator _generator = GeneratorFactory.GetInstance(GeneratorStyle.SDK);
+
+		/// <summary>
+		/// Whether this is a CodeBuddy CN (China domestic) installation.
+		/// </summary>
+		public bool IsCN { get; set; }
 
 		public override bool SupportsAnalyzers
 		{
@@ -37,8 +37,8 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 		private string GetExtensionPath()
 		{
-			var vscode = IsPrerelease ? ".vscode-insiders" : ".vscode";
-			var extensionsPath = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), vscode, "extensions");
+			var configDir = IsCN ? ".codebuddycn" : ".codebuddy";
+			var extensionsPath = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), configDir, "extensions");
 			if (!Directory.Exists(extensionsPath))
 				return null;
 
@@ -68,16 +68,21 @@ namespace Microsoft.Unity.VisualStudio.Editor
 		private static bool IsCandidateForDiscovery(string path)
 		{
 #if UNITY_EDITOR_OSX
-			return Directory.Exists(path) && Regex.IsMatch(path, ".*Code.*.app$", RegexOptions.IgnoreCase);
+			return Directory.Exists(path) && Regex.IsMatch(path, @".*CodeBuddy(\s*CN)?.*\.app$", RegexOptions.IgnoreCase);
 #elif UNITY_EDITOR_WIN
-			return File.Exists(path) && Regex.IsMatch(path, ".*Code.*.exe$", RegexOptions.IgnoreCase);
+			return File.Exists(path) && Regex.IsMatch(path, @".*CodeBuddy(\s*CN)?.*\.exe$", RegexOptions.IgnoreCase);
 #else
-			return File.Exists(path) && path.EndsWith("code", StringComparison.OrdinalIgnoreCase);
+			return File.Exists(path) && Regex.IsMatch(path, @"codebuddy[\-\s]?cn$|codebuddy$", RegexOptions.IgnoreCase);
 #endif
 		}
 
+		private static bool IsCodeBuddyCN(string path)
+		{
+			return Regex.IsMatch(path, @"CodeBuddy\s*CN", RegexOptions.IgnoreCase);
+		}
+
 		[Serializable]
-		internal class VisualStudioCodeManifest
+		internal class CodeBuddyManifest
 		{
 			public string name;
 			public string version;
@@ -94,22 +99,22 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				return false;
 
 			Version version = null;
-			var isPrerelease = false;
+			var isCN = IsCodeBuddyCN(editorPath);
 
 			try
 			{
-				var manifestBase = GetRealPath(editorPath);
+				var manifestBase = VisualStudioCodeInstallation.GetRealPath(editorPath);
 
 #if UNITY_EDITOR_WIN
 				// on Windows, editorPath is a file, resources as subdirectory
 				manifestBase = IOPath.GetDirectoryName(manifestBase);
 #elif UNITY_EDITOR_OSX
-				// on Mac, editorPath is a directory
+				// on Mac, editorPath is a directory (.app bundle)
 				manifestBase = IOPath.Combine(manifestBase, "Contents");
 #else
 				// on Linux, editorPath is a file, in a bin sub-directory
 				var parent = Directory.GetParent(manifestBase);
-				// but we can link to [vscode]/code or [vscode]/bin/code
+				// but we can link to [app]/codebuddy or [app]/bin/codebuddy
 				manifestBase = parent?.Name == "bin" ? parent.Parent?.FullName : parent?.FullName;
 #endif
 
@@ -119,16 +124,8 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				var manifestFullPath = IOPath.Combine(manifestBase, "resources", "app", "package.json");
 				if (File.Exists(manifestFullPath))
 				{
-					var manifest = JsonUtility.FromJson<VisualStudioCodeManifest>(File.ReadAllText(manifestFullPath));
+					var manifest = JsonUtility.FromJson<CodeBuddyManifest>(File.ReadAllText(manifestFullPath));
 					Version.TryParse(manifest.version.Split('-').First(), out version);
-					isPrerelease = manifest.version.ToLower().Contains("insider");
-				}
-
-				if (version == null)
-				{
-					var vi = FileVersionInfo.GetVersionInfo(editorPath);
-					Version.TryParse(vi.ProductVersion.Split('-').First(), out version);
-					isPrerelease = vi.ProductVersion.ToLower().Contains("insider");
 				}
 			}
 			catch (Exception)
@@ -136,11 +133,12 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				// do not fail if we are not able to retrieve the exact version number
 			}
 
-			isPrerelease = isPrerelease || editorPath.ToLower().Contains("insider");
-			installation = new VisualStudioCodeInstallation()
+			var displayName = isCN ? "CodeBuddy CN" : "CodeBuddy";
+			installation = new CodeBuddyInstallation()
 			{
-				IsPrerelease = isPrerelease,
-				Name = "Visual Studio Code" + (isPrerelease ? " - Insider" : string.Empty) + (version != null ? $" [{version.ToString(3)}]" : string.Empty),
+				IsCN = isCN,
+				IsPrerelease = false,
+				Name = displayName + (version != null ? $" [{version.ToString(3)}]" : string.Empty),
 				Path = editorPath,
 				Version = version ?? new Version()
 			};
@@ -148,7 +146,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			return true;
 		}
 
-		public static IEnumerable<IVisualStudioInstallation> GetVisualStudioInstallations()
+		public static IEnumerable<IVisualStudioInstallation> GetCodeBuddyInstallations()
 		{
 			var candidates = new List<string>();
 
@@ -156,22 +154,35 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			var localAppPath = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
 			var programFiles = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
 
-			foreach (var basePath in new[] {localAppPath, programFiles})
+			foreach (var basePath in new[] { localAppPath, programFiles })
 			{
-				candidates.Add(IOPath.Combine(basePath, "Microsoft VS Code", "Code.exe"));
-				candidates.Add(IOPath.Combine(basePath, "Microsoft VS Code Insiders", "Code - Insiders.exe"));
+				// CodeBuddy (international)
+				candidates.Add(IOPath.Combine(basePath, "CodeBuddy", "CodeBuddy.exe"));
+				// CodeBuddy CN (domestic)
+				candidates.Add(IOPath.Combine(basePath, "CodeBuddy CN", "CodeBuddy CN.exe"));
 			}
 #elif UNITY_EDITOR_OSX
 			var appPath = IOPath.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
-			candidates.AddRange(Directory.EnumerateDirectories(appPath, "Visual Studio Code*.app"));
+			// CodeBuddy (international) and CodeBuddy CN (domestic) .app bundles
+			candidates.AddRange(Directory.EnumerateDirectories(appPath, "CodeBuddy*.app"));
+			candidates.AddRange(Directory.EnumerateDirectories(appPath, "CodeBuddy CN*.app"));
 #elif UNITY_EDITOR_LINUX
-			// Well known locations
-			candidates.Add("/usr/bin/code");
-			candidates.Add("/bin/code");
-			candidates.Add("/usr/local/bin/code");
+			// Note: Linux support is not yet available for CodeBuddy IDE,
+			// but we include standard paths for forward compatibility.
+
+			// Well known locations for CodeBuddy
+			candidates.Add("/usr/bin/codebuddy");
+			candidates.Add("/bin/codebuddy");
+			candidates.Add("/usr/local/bin/codebuddy");
+
+			// Well known locations for CodeBuddy CN
+			candidates.Add("/usr/bin/codebuddycn");
+			candidates.Add("/bin/codebuddycn");
+			candidates.Add("/usr/local/bin/codebuddycn");
 
 			// Preference ordered base directories relative to which desktop files should be searched
-			candidates.AddRange(GetXdgCandidates());
+			candidates.AddRange(GetXdgCandidates("codebuddy.desktop"));
+			candidates.AddRange(GetXdgCandidates("codebuddycn.desktop"));
 #endif
 
 			foreach (var candidate in candidates.Distinct())
@@ -184,23 +195,23 @@ namespace Microsoft.Unity.VisualStudio.Editor
 #if UNITY_EDITOR_LINUX
 		private static readonly Regex DesktopFileExecEntry = new Regex(@"Exec=(\S+)", RegexOptions.Singleline | RegexOptions.Compiled);
 
-		private static IEnumerable<string> GetXdgCandidates()
+		private static IEnumerable<string> GetXdgCandidates(string desktopFileName)
 		{
 			var envdirs = Environment.GetEnvironmentVariable("XDG_DATA_DIRS");
 			if (string.IsNullOrEmpty(envdirs))
 				yield break;
 
 			var dirs = envdirs.Split(':');
-			foreach(var dir in dirs)
+			foreach (var dir in dirs)
 			{
 				Match match = null;
 
 				try
 				{
-					var desktopFile = IOPath.Combine(dir, "applications/code.desktop");
+					var desktopFile = IOPath.Combine(dir, "applications", desktopFileName);
 					if (!File.Exists(desktopFile))
 						continue;
-				
+
 					var content = File.ReadAllText(desktopFile);
 					match = DesktopFileExecEntry.Match(content);
 				}
@@ -215,24 +226,6 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				yield return match.Groups[1].Value;
 				break;
 			}
-		}
-
-		[System.Runtime.InteropServices.DllImport ("libc")]
-		private static extern int readlink(string path, byte[] buffer, int buflen);
-
-		internal static string GetRealPath(string path)
-		{
-			byte[] buf = new byte[512];
-			int ret = readlink(path, buf, buf.Length);
-			if (ret == -1) return path;
-			char[] cbuf = new char[512];
-			int chars = System.Text.Encoding.Default.GetChars(buf, 0, ret, cbuf, 0);
-			return new String(cbuf, 0, chars);
-		}
-#else
-		internal static string GetRealPath(string path)
-		{
-			return path;
 		}
 #endif
 
@@ -467,7 +460,6 @@ namespace Microsoft.Unity.VisualStudio.Editor
 
 		private static void CreateRecommendedExtensionsFile(string vscodeDirectory, bool enablePatch)
 		{
-			// see https://tattoocoder.com/recommending-vscode-extensions-within-your-open-source-projects/
 			var extensionFile = IOPath.Combine(vscodeDirectory, "extensions.json");
 			if (File.Exists(extensionFile))
 			{
@@ -552,7 +544,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 			// wrap with built-in OSX open feature
 			arguments = $"-n \"{application}\" --args {arguments}";
 			application = "open";
-			return ProcessRunner.ProcessStartInfoFor(application, arguments, redirect:false, shell: true);
+			return ProcessRunner.ProcessStartInfoFor(application, arguments, redirect: false, shell: true);
 #else
 			return ProcessRunner.ProcessStartInfoFor(application, arguments, redirect: false);
 #endif

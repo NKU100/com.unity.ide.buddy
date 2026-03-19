@@ -18,6 +18,9 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				yield return installation;
 #endif
 
+			foreach (var installation in CodeBuddyInstallation.GetCodeBuddyInstallations())
+				yield return installation;
+
 			foreach (var installation in VisualStudioCodeInstallation.GetVisualStudioInstallations())
 				yield return installation;
 		}
@@ -30,6 +33,9 @@ namespace Microsoft.Unity.VisualStudio.Editor
 				if (VisualStudioForWindowsInstallation.TryDiscoverInstallation(editorPath, out installation))
 					return true;
 #endif
+				if (CodeBuddyInstallation.TryDiscoverInstallation(editorPath, out installation))
+					return true;
+
 				if (VisualStudioCodeInstallation.TryDiscoverInstallation(editorPath, out installation))
 					return true;
 			}
@@ -46,6 +52,7 @@ namespace Microsoft.Unity.VisualStudio.Editor
 #if UNITY_EDITOR_WIN
 			VisualStudioForWindowsInstallation.Initialize();
 #endif
+			CodeBuddyInstallation.Initialize();
 			VisualStudioCodeInstallation.Initialize();
 		}
 	}
